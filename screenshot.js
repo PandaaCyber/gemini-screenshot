@@ -20,16 +20,14 @@ const puppeteer = require('puppeteer');
   });
 
   const page = await browser.newPage();
-
   await page.goto(url, { waitUntil: 'networkidle2' });
 
-  // 等待主体元素
-  await waitSafe(page, () => page.waitForSelector('body', { timeout: 15000 }));
+  await safeWait(() => page.waitForSelector('body', { timeout: 15000 }));
 
-  // 处理弹窗（“Continue / Try Gemini”等）
+  // 干掉遮罩 & 点击“Continue/继续”
   await dismissModal(page);
 
-  // 滚动加载
+  // 下拉到最底部以加载所有内容
   await autoScroll(page);
 
   // 再等一下，确保最后渲染完成
@@ -37,8 +35,8 @@ const puppeteer = require('puppeteer');
 
   const filename = `gemini_canvas_${Date.now()}.png`;
   await page.screenshot({ path: filename, fullPage: true });
-
   console.log(`✅ 截图已保存：${filename}`);
+
   await browser.close();
 })().catch(err => {
   console.error('❌ 运行出错：', err);
@@ -46,32 +44,30 @@ const puppeteer = require('puppeteer');
 });
 
 async function dismissModal(page) {
-  // 1) 直接删除遮罩层/弹窗
+  // 直接在页面中移除常见弹窗 / 遮罩
   await page.evaluate(() => {
-    // 删除 role="dialog" 的弹窗
+    // 删除所有 role="dialog" 的节点
     document.querySelectorAll('[role="dialog"]').forEach(el => el.remove());
-    // 删除底部登录提示条
+    // 底部提示条
     document.querySelectorAll('div[aria-live="polite"]').forEach(el => el.remove());
   });
 
-  // 2) 如果按钮仍在，尝试点“Continue”或“继续”
-  const candidates = [
-    "//button[.//text()[contains(.,'Continue')]]",
-    "//button[.//text()[contains(.,'继续')]]",
-    "//button[.//text()[contains(.,'Try Gemini')]]",
-    "//button[.//text()[contains(.,'继续使用')]]"
-  ];
-
-  for (const xp of candidates) {
-    const btns = await page.$x(xp);
-    if (btns.length) {
-      try {
-        await btns[0].click();
-        await sleep(1500);
+  // 再尝试点击包含关键字的按钮
+  await page.evaluate(() => {
+    const keywords = ['Continue', '继续', 'Try Gemini', '继续使用', 'Try Gemini Canvas'];
+    const buttons = Array.from(document.querySelectorAll('button, div[role="button"], a'));
+    for (const btn of buttons) {
+      const txt = (btn.innerText || btn.textContent || '').trim();
+      if (!txt) continue;
+      if (keywords.some(k => txt.includes(k))) {
+        btn.click();
         break;
-      } catch (_) {}
+      }
     }
-  }
+  });
+
+  // 给点击一些时间
+  await sleep(1500);
 }
 
 async function autoScroll(page) {
@@ -80,10 +76,10 @@ async function autoScroll(page) {
       let totalHeight = 0;
       const distance = 250;
       const timer = setInterval(() => {
-        const scrollHeight = document.body.scrollHeight;
+        const sh = document.body.scrollHeight;
         window.scrollBy(0, distance);
         totalHeight += distance;
-        if (totalHeight >= scrollHeight - window.innerHeight) {
+        if (totalHeight >= sh - window.innerHeight) {
           clearInterval(timer);
           resolve();
         }
@@ -93,10 +89,10 @@ async function autoScroll(page) {
 }
 
 function sleep(ms) {
-  return new Promise(res => setTimeout(res, ms));
+  return new Promise(r => setTimeout(r, ms));
 }
 
-async function waitSafe(page, fn) {
+async function safeWait(fn) {
   try { await fn(); } catch (_) {}
 }
 
