@@ -1,12 +1,16 @@
-const puppeteer = require('puppeteer');
+// 使用 puppeteer‑extra + stealth
+const puppeteer = require('puppeteer-extra');
+const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+puppeteer.use(StealthPlugin());
 
 (async () => {
   const url = process.argv[2];
   if (!url || !url.startsWith('https://')) {
-    console.error('❌ 请传入有效的 Gemini Canvas 链接，例如：node screenshot.js https://g.co/gemini/share/xxxxx');
+    console.error('❌ 请输入有效 Gemini 链接，如: node screenshot.js https://g.co/gemini/share/xxxxx');
     process.exit(1);
   }
 
+  // 启动浏览器
   const browser = await puppeteer.launch({
     headless: 'new',
     defaultViewport: null,
@@ -14,119 +18,74 @@ const puppeteer = require('puppeteer');
       '--no-sandbox',
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
-      '--disable-gpu',
-      '--window-size=1280,8000',
-      '--disable-features=IsolateOrigins,site-per-process'
+      '--window-size=1280,8000'
     ]
   });
 
   const page = await browser.newPage();
+
+  // 伪装正常用户 UA
+  await page.setUserAgent(
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ' +
+    '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+  );
+
+  // 隐藏 webdriver 痕迹（保险起见）
+  await page.evaluateOnNewDocument(() => {
+    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+  });
+
+  // 打开链接
   await page.goto(url, { waitUntil: 'networkidle2' });
 
-  await safeWait(() => page.waitForSelector('body', { timeout: 15000 }));
-
-  // 连续尝试处理弹窗
+  // 如有“Continue / 继续”按钮，自动点击 3 次
   for (let i = 0; i < 3; i++) {
-    await dismissModal(page);
+    await page.evaluate(() => {
+      const keywords = ['Continue', '继续', 'Preview', 'Try Gemini Canvas'];
+      [...document.querySelectorAll('button, [role="button"], a')].forEach(el => {
+        const txt = (el.innerText || el.textContent || '').trim();
+        if (keywords.some(k => txt.includes(k))) el.click();
+      });
+    });
     await sleep(800);
   }
 
-  // 等待真正内容出现
-  const mainHandle = await waitCanvasAndGetHandle(page);
+  // 等待真正内容加载：页面文本长度足够大
+  await page.waitForFunction(
+    () => (document.body.innerText || '').length > 500,
+    { timeout: 20000 }
+  );
 
-  // 尝试整页截图
+  // 向下滚动加载全部懒加载元素
+  await autoScroll(page);
+  await sleep(1500);
+
   const filename = `gemini_canvas_${Date.now()}.png`;
-  try {
-    await autoScroll(page);
-    await sleep(1500);
-    await page.screenshot({ path: filename, fullPage: true });
-  } catch (e) {
-    console.warn('⚠️ fullPage 截图失败，改为只截主容器：', e.message);
-    if (mainHandle) {
-      await mainHandle.screenshot({ path: filename });
-    } else {
-      throw e;
-    }
-  }
+  await page.screenshot({ path: filename, fullPage: true });
+  console.log(`✅ 已保存 ${filename}`);
 
-  console.log(`✅ 截图已保存：${filename}`);
   await browser.close();
 })().catch(err => {
-  console.error('❌ 运行出错：', err);
+  console.error('❌ 运行报错：', err);
   process.exit(1);
 });
 
-async function dismissModal(page) {
-  await page.evaluate(() => {
-    // 1) 删除遮罩/弹窗
-    document.querySelectorAll('[role="dialog"], [aria-modal="true"]').forEach(el => el.remove());
-    document.querySelectorAll('div[aria-live="polite"]').forEach(el => el.remove());
-  });
-
-  // 2) 点击关键字按钮
-  await page.evaluate(() => {
-    const keywords = ['Continue', '继续', 'Try Gemini', 'Try Gemini Canvas', 'Preview', '继续使用'];
-    const nodes = Array.from(document.querySelectorAll('button, [role="button"], a'));
-    for (const n of nodes) {
-      const t = (n.innerText || n.textContent || '').trim();
-      if (!t) continue;
-      if (keywords.some(k => t.includes(k))) {
-        n.click();
-      }
-    }
-  });
-}
-
-async function waitCanvasAndGetHandle(page) {
-  // 等待文本量足够大且不是登录页的提示
-  await safeWait(() =>
-    page.waitForFunction(() => {
-      const txt = (document.body.innerText || '').replace(/\s+/g, ' ');
-      const enoughText = txt.length > 500;
-      const notLogin = !/Meet Gemini|Sign in|登录|继续|Try Gemini/.test(txt);
-      return enoughText && notLogin;
-    }, { timeout: 20000 })
-  );
-
-  // 返回一个可能的主容器句柄
-  const selectors = [
-    '[data-testid*="canvas"]',
-    'main section',
-    'article',
-    'main'
-  ];
-  for (const sel of selectors) {
-    const h = await page.$(sel);
-    if (h) return h;
-  }
-  return null;
-}
-
 async function autoScroll(page) {
   await page.evaluate(async () => {
-    await new Promise(resolve => {
-      let total = 0;
-      const step = 300;
-      const timer = setInterval(() => {
-        const sh = document.body.scrollHeight;
+    await new Promise(res => {
+      let y = 0;
+      const step = 400;
+      const t = setInterval(() => {
         window.scrollBy(0, step);
-        total += step;
-        if (total >= sh - window.innerHeight) {
-          clearInterval(timer);
-          resolve();
+        y += step;
+        if (y >= document.body.scrollHeight - window.innerHeight) {
+          clearInterval(t); res();
         }
       }, 120);
     });
   });
 }
-
-function sleep(ms) {
-  return new Promise(r => setTimeout(r, ms));
-}
-
-async function safeWait(fn) {
-  try { await fn(); } catch (_) {}
-}
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 
 
