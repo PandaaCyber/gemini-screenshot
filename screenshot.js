@@ -15,22 +15,24 @@ const puppeteer = require('puppeteer');
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
       '--disable-gpu',
-      '--window-size=1280,4000'
+      '--window-size=1280,6000'
     ]
   });
 
   const page = await browser.newPage();
 
-  // 加载页面
   await page.goto(url, { waitUntil: 'networkidle2' });
 
-  // 等待主体元素出现（根据需要可换成更具体的选择器）
-  await page.waitForSelector('body', { timeout: 15000 });
+  // 等待主体元素
+  await waitSafe(page, () => page.waitForSelector('body', { timeout: 15000 }));
 
-  // 滚动加载全部内容
+  // 处理弹窗（“Continue / Try Gemini”等）
+  await dismissModal(page);
+
+  // 滚动加载
   await autoScroll(page);
 
-  // 额外等一下，确保最后一屏渲染完成
+  // 再等一下，确保最后渲染完成
   await sleep(2000);
 
   const filename = `gemini_canvas_${Date.now()}.png`;
@@ -43,26 +45,58 @@ const puppeteer = require('puppeteer');
   process.exit(1);
 });
 
+async function dismissModal(page) {
+  // 1) 直接删除遮罩层/弹窗
+  await page.evaluate(() => {
+    // 删除 role="dialog" 的弹窗
+    document.querySelectorAll('[role="dialog"]').forEach(el => el.remove());
+    // 删除底部登录提示条
+    document.querySelectorAll('div[aria-live="polite"]').forEach(el => el.remove());
+  });
+
+  // 2) 如果按钮仍在，尝试点“Continue”或“继续”
+  const candidates = [
+    "//button[.//text()[contains(.,'Continue')]]",
+    "//button[.//text()[contains(.,'继续')]]",
+    "//button[.//text()[contains(.,'Try Gemini')]]",
+    "//button[.//text()[contains(.,'继续使用')]]"
+  ];
+
+  for (const xp of candidates) {
+    const btns = await page.$x(xp);
+    if (btns.length) {
+      try {
+        await btns[0].click();
+        await sleep(1500);
+        break;
+      } catch (_) {}
+    }
+  }
+}
+
 async function autoScroll(page) {
   await page.evaluate(async () => {
     await new Promise(resolve => {
       let totalHeight = 0;
-      const distance = 200;
+      const distance = 250;
       const timer = setInterval(() => {
         const scrollHeight = document.body.scrollHeight;
         window.scrollBy(0, distance);
         totalHeight += distance;
-
         if (totalHeight >= scrollHeight - window.innerHeight) {
           clearInterval(timer);
           resolve();
         }
-      }, 100);
+      }, 120);
     });
   });
 }
 
 function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
+  return new Promise(res => setTimeout(res, ms));
+}
+
+async function waitSafe(page, fn) {
+  try { await fn(); } catch (_) {}
 }
 
