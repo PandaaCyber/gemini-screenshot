@@ -15,22 +15,30 @@ const puppeteer = require('puppeteer');
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
       '--disable-gpu',
-      '--window-size=1280,6000'
+      '--window-size=1280,8000'
     ]
   });
 
   const page = await browser.newPage();
+
   await page.goto(url, { waitUntil: 'networkidle2' });
 
+  // 等待主体
   await safeWait(() => page.waitForSelector('body', { timeout: 15000 }));
 
-  // 干掉遮罩 & 点击“Continue/继续”
-  await dismissModal(page);
+  // 连续尝试 3 次处理弹窗/按钮
+  for (let i = 0; i < 3; i++) {
+    await dismissModal(page);
+    await sleep(800);
+  }
 
-  // 下拉到最底部以加载所有内容
+  // 等待真正的 Canvas 内容出现（尝试常见选择器/文本）
+  await waitCanvas(page);
+
+  // 滚动到底部
   await autoScroll(page);
 
-  // 再等一下，确保最后渲染完成
+  // 再等一会儿，避免最后一屏没渲染完整
   await sleep(2000);
 
   const filename = `gemini_canvas_${Date.now()}.png`;
@@ -44,37 +52,47 @@ const puppeteer = require('puppeteer');
 });
 
 async function dismissModal(page) {
-  // 直接在页面中移除常见弹窗 / 遮罩
   await page.evaluate(() => {
-    // 删除所有 role="dialog" 的节点
-    document.querySelectorAll('[role="dialog"]').forEach(el => el.remove());
-    // 底部提示条
+    // 1) 删掉常见遮罩/弹窗
+    document.querySelectorAll('[role="dialog"], [aria-modal="true"]').forEach(el => el.remove());
     document.querySelectorAll('div[aria-live="polite"]').forEach(el => el.remove());
   });
 
-  // 再尝试点击包含关键字的按钮
+  // 2) 点击包含关键词的按钮
   await page.evaluate(() => {
-    const keywords = ['Continue', '继续', 'Try Gemini', '继续使用', 'Try Gemini Canvas'];
-    const buttons = Array.from(document.querySelectorAll('button, div[role="button"], a'));
-    for (const btn of buttons) {
+    const keywords = ['Continue', '继续', 'Try Gemini', 'Try Gemini Canvas', 'Preview', '继续使用'];
+    const clickable = Array.from(document.querySelectorAll('button, div[role="button"], a'));
+    for (const btn of clickable) {
       const txt = (btn.innerText || btn.textContent || '').trim();
       if (!txt) continue;
       if (keywords.some(k => txt.includes(k))) {
         btn.click();
-        break;
       }
     }
   });
+}
 
-  // 给点击一些时间
-  await sleep(1500);
+async function waitCanvas(page) {
+  // 等待页面上出现非登录文本、或主要容器
+  await safeWait(() =>
+    page.waitForFunction(() => {
+      const text = document.body.innerText || '';
+      const hasContent =
+        text.length > 500 && !/Meet Gemini|Sign in|登录|继续|Try Gemini/.test(text);
+      const possibleCanvas =
+        document.querySelector('[data-testid*="canvas"]') ||
+        document.querySelector('main section') ||
+        document.querySelector('article');
+      return hasContent && possibleCanvas;
+    }, { timeout: 20000 })
+  );
 }
 
 async function autoScroll(page) {
   await page.evaluate(async () => {
     await new Promise(resolve => {
       let totalHeight = 0;
-      const distance = 250;
+      const distance = 300;
       const timer = setInterval(() => {
         const sh = document.body.scrollHeight;
         window.scrollBy(0, distance);
@@ -95,4 +113,5 @@ function sleep(ms) {
 async function safeWait(fn) {
   try { await fn(); } catch (_) {}
 }
+
 
