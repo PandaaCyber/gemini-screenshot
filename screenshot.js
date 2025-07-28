@@ -24,21 +24,24 @@ const puppeteer = require('puppeteer');
   // 加载页面
   await page.goto(url, { waitUntil: 'networkidle2' });
 
-  // 可选：等待页面关键元素（若你知道选择器可替换'body'）
+  // 等待主体元素出现（根据需要可换成更具体的选择器）
   await page.waitForSelector('body', { timeout: 15000 });
 
-  // 自动滚动，确保懒加载内容出现
+  // 滚动加载全部内容
   await autoScroll(page);
 
-  // 额外等待，避免最后一屏还在渲染
-  await page.waitForTimeout(2000);
+  // 额外等一下，确保最后一屏渲染完成
+  await sleep(2000);
 
   const filename = `gemini_canvas_${Date.now()}.png`;
   await page.screenshot({ path: filename, fullPage: true });
 
   console.log(`✅ 截图已保存：${filename}`);
   await browser.close();
-})();
+})().catch(err => {
+  console.error('❌ 运行出错：', err);
+  process.exit(1);
+});
 
 async function autoScroll(page) {
   await page.evaluate(async () => {
@@ -58,3 +61,8 @@ async function autoScroll(page) {
     });
   });
 }
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
