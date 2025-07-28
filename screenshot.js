@@ -2,8 +2,8 @@ const puppeteer = require('puppeteer');
 
 (async () => {
   const url = process.argv[2];
-  if (!url || !url.startsWith('https://')) {
-    console.error('❌ 请传入有效的 Gemini Canvas 链接，例如：node screenshot.js https://g.co/gemini/share/xxxxx');
+  if (!url || !/^https?:\/\//.test(url)) {
+    console.error('❌ 请输入有效链接：node screenshot.js https://g.co/gemini/share/xxxx');
     process.exit(1);
   }
 
@@ -15,31 +15,31 @@ const puppeteer = require('puppeteer');
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
       '--disable-gpu',
-      '--window-size=1280,8000'
+      '--window-size=1280,8000',
+      '--lang=zh-CN,zh,en-US,en'
     ]
   });
 
   const page = await browser.newPage();
+  await page.goto(url, { waitUntil: 'domcontentloaded' });
 
-  await page.goto(url, { waitUntil: 'networkidle2' });
-
-  // 等待主体
   await safeWait(() => page.waitForSelector('body', { timeout: 15000 }));
 
-  // 连续尝试 3 次处理弹窗/按钮
-  for (let i = 0; i < 3; i++) {
+  // 尝试最多 5 次去掉登录/继续弹窗
+  for (let i = 0; i < 5; i++) {
     await dismissModal(page);
-    await sleep(800);
+    // 如果已进入内容就退出循环
+    if (await isCanvasVisible(page)) break;
+    await sleep(1200);
   }
 
-  // 等待真正的 Canvas 内容出现（尝试常见选择器/文本）
-  await waitCanvas(page);
+  // 再判断一次内容是否出来
+  if (!(await isCanvasVisible(page))) {
+    console.warn('⚠️ 仍未检测到 Canvas，继续滚动并强制截图首页（可能灰屏）');
+  }
 
-  // 滚动到底部
   await autoScroll(page);
-
-  // 再等一会儿，避免最后一屏没渲染完整
-  await sleep(2000);
+  await sleep(1500);
 
   const filename = `gemini_canvas_${Date.now()}.png`;
   await page.screenshot({ path: filename, fullPage: true });
@@ -53,51 +53,47 @@ const puppeteer = require('puppeteer');
 
 async function dismissModal(page) {
   await page.evaluate(() => {
-    // 1) 删掉常见遮罩/弹窗
-    document.querySelectorAll('[role="dialog"], [aria-modal="true"]').forEach(el => el.remove());
-    document.querySelectorAll('div[aria-live="polite"]').forEach(el => el.remove());
+    // 1. 删除常见弹层/遮罩
+    document.querySelectorAll('[role="dialog"], [aria-modal="true"], .modal, .scrim, .c7m2af').forEach(el => el.remove());
+    // 2. 删除底部“Sign in”提示条
+    document.querySelectorAll('div[aria-live="polite"], [data-testid*="signin"]').forEach(el => el.remove());
+    // 3. 清理 body 禁止滚动属性
+    document.body.style.overflow = 'auto';
   });
 
-  // 2) 点击包含关键词的按钮
+  // 4. 点击包含关键字的按钮
   await page.evaluate(() => {
     const keywords = ['Continue', '继续', 'Try Gemini', 'Try Gemini Canvas', 'Preview', '继续使用'];
-    const clickable = Array.from(document.querySelectorAll('button, div[role="button"], a'));
-    for (const btn of clickable) {
-      const txt = (btn.innerText || btn.textContent || '').trim();
+    const nodes = Array.from(document.querySelectorAll('button, div[role="button"], a'));
+    for (const n of nodes) {
+      const txt = (n.innerText || n.textContent || '').trim();
       if (!txt) continue;
       if (keywords.some(k => txt.includes(k))) {
-        btn.click();
+        n.click();
       }
     }
   });
 }
 
-async function waitCanvas(page) {
-  // 等待页面上出现非登录文本、或主要容器
-  await safeWait(() =>
-    page.waitForFunction(() => {
-      const text = document.body.innerText || '';
-      const hasContent =
-        text.length > 500 && !/Meet Gemini|Sign in|登录|继续|Try Gemini/.test(text);
-      const possibleCanvas =
-        document.querySelector('[data-testid*="canvas"]') ||
-        document.querySelector('main section') ||
-        document.querySelector('article');
-      return hasContent && possibleCanvas;
-    }, { timeout: 20000 })
-  );
+async function isCanvasVisible(page) {
+  // 逻辑：页面文本足够长 & 没有“Meet Gemini / Sign in”等明显首页词
+  return page.evaluate(() => {
+    const txt = (document.body.innerText || '').replace(/\s+/g, ' ');
+    const tooShort = txt.length < 800; // 内容太短说明没加载
+    const hasHomeWords = /Meet Gemini|your personal AI assistant|Sign in|登录|Try Gemini/i.test(txt);
+    return !tooShort && !hasHomeWords;
+  });
 }
 
 async function autoScroll(page) {
   await page.evaluate(async () => {
     await new Promise(resolve => {
-      let totalHeight = 0;
-      const distance = 300;
+      let total = 0;
+      const step = 300;
       const timer = setInterval(() => {
-        const sh = document.body.scrollHeight;
-        window.scrollBy(0, distance);
-        totalHeight += distance;
-        if (totalHeight >= sh - window.innerHeight) {
+        window.scrollBy(0, step);
+        total += step;
+        if (total >= document.body.scrollHeight - window.innerHeight) {
           clearInterval(timer);
           resolve();
         }
@@ -113,5 +109,6 @@ function sleep(ms) {
 async function safeWait(fn) {
   try { await fn(); } catch (_) {}
 }
+
 
 
