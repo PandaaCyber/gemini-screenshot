@@ -1,4 +1,3 @@
-
 const puppeteer = require('puppeteer');
 
 (async () => {
@@ -11,13 +10,28 @@ const puppeteer = require('puppeteer');
   const browser = await puppeteer.launch({
     headless: 'new',
     defaultViewport: null,
-    args: ['--start-maximized']
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--window-size=1280,4000'
+    ]
   });
 
   const page = await browser.newPage();
+
+  // 加载页面
   await page.goto(url, { waitUntil: 'networkidle2' });
 
+  // 可选：等待页面关键元素（若你知道选择器可替换'body'）
+  await page.waitForSelector('body', { timeout: 15000 });
+
+  // 自动滚动，确保懒加载内容出现
   await autoScroll(page);
+
+  // 额外等待，避免最后一屏还在渲染
+  await page.waitForTimeout(2000);
 
   const filename = `gemini_canvas_${Date.now()}.png`;
   await page.screenshot({ path: filename, fullPage: true });
@@ -30,11 +44,13 @@ async function autoScroll(page) {
   await page.evaluate(async () => {
     await new Promise(resolve => {
       let totalHeight = 0;
-      const distance = 100;
+      const distance = 200;
       const timer = setInterval(() => {
+        const scrollHeight = document.body.scrollHeight;
         window.scrollBy(0, distance);
         totalHeight += distance;
-        if (totalHeight >= document.body.scrollHeight - window.innerHeight) {
+
+        if (totalHeight >= scrollHeight - window.innerHeight) {
           clearInterval(timer);
           resolve();
         }
