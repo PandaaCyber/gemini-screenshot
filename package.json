@@ -1,7 +1,7 @@
 {
   "name": "gemini-screenshot",
   "version": "1.0.0",
-  "description": "Auto screenshot Gemini Canvas pages using Puppeteer",
+  "description": "Auto screenshot Google Gemini Canvas pages using Puppeteer",
   "main": "screenshot.js",
   "scripts": {
     "start": "node screenshot.js"
@@ -9,6 +9,8 @@
   "author": "your-github-username",
   "license": "MIT",
   "dependencies": {
-    "puppeteer": "^22.0.0"
+    "puppeteer": "^22.0.0",
+    "puppeteer-extra": "^4.3.1",
+    "puppeteer-extra-plugin-stealth": "^2.12.0"
   }
 }
