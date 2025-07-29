@@ -1,12 +1,10 @@
-// ===== 1. 引入 puppeteer‑extra + stealth =========
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 puppeteer.use(StealthPlugin());
 
-// ===== 2. 主流程 =================================
 (async () => {
   const url = process.argv[2];
-  if (!url || !url.startsWith('https://')) {
+  if (!url?.startsWith('https://')) {
     console.error('用法: node screenshot.js https://g.co/gemini/share/xxxxx');
     process.exit(1);
   }
@@ -26,22 +24,25 @@ puppeteer.use(StealthPlugin());
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ' +
     '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
   );
-
-  // 隐藏 webdriver 痕迹
   await page.evaluateOnNewDocument(() =>
     Object.defineProperty(navigator, 'webdriver', { get: () => undefined })
   );
 
   await page.goto(url, { waitUntil: 'networkidle2' });
 
-  // ===== 3. 找到并点击“Continue / 继续” ==================
-  await clickContinue(page);          // <— 关键修改
+  // 1️⃣ 递归查找 + 点击 Continue / 继续
+  await clickContinueRecursive(page);
 
-  // ===== 4. 等真正 Canvas 内容出现 ======================
-  await page.waitForSelector('h1', { timeout: 20000 }); // 题目 H1
+  // 2️⃣ 等待正文出现（文本长度>500 且不含 “Meet Gemini”）
+  const hasBodyText = () =>
+    (document.body.innerText || '').length > 500 &&
+    !/Meet Gemini|个人 Assistant|Sign in|登录/.test(document.body.innerText);
+
+  await page.waitForFunction(hasBodyText, { timeout: 30000 }).catch(() => {});
+
+  // 3️⃣ 滚动 + 截图
   await autoScroll(page);
   await sleep(1200);
-
   const file = `gemini_canvas_${Date.now()}.png`;
   await page.screenshot({ path: file, fullPage: true });
   console.log(`✅ 已保存 ${file}`);
@@ -52,26 +53,30 @@ puppeteer.use(StealthPlugin());
   process.exit(1);
 });
 
-// ========= 工具函数 ==================================
+/* ---------- 工具函数 ---------- */
 
-async function clickContinue(page) {
+async function clickContinueRecursive(page) {
   const keywords = ['Continue', '继续', 'Try Gemini Canvas', 'Preview'];
-  for (let i = 0; i < 5; i++) {
-    // 尝试点击按钮
-    const clicked = await page.evaluate(kws => {
-      const btn = [...document.querySelectorAll('button, [role="button"], a')]
-        .find(el => kws.some(k => (el.innerText || '').includes(k)));
-      if (btn) { btn.click(); return true; }
-      return false;
-    }, keywords);
 
-    // 如果点击成功，等待内容渲染再退出循环
-    if (clicked) {
-      await sleep(1200);
-      break;
-    }
-    await sleep(400);
+  // 点击顶层
+  await clickKeywords(page, keywords);
+
+  // 递归 iframe
+  const frames = page.frames();
+  for (const fr of frames) {
+    try { await clickKeywords(fr, keywords); } catch (_) {}
   }
+  await sleep(1200); // 给加载时间
+}
+
+async function clickKeywords(ctx, kws) {
+  await ctx.evaluate(kwsArr => {
+    const els = [...document.querySelectorAll('button,[role="button"],a')];
+    els.forEach(el => {
+      const t = (el.innerText || el.textContent || '').trim();
+      if (kwsArr.some(k => t.includes(k))) el.click();
+    });
+  }, kws);
 }
 
 async function autoScroll(page) {
@@ -79,8 +84,7 @@ async function autoScroll(page) {
     await new Promise(res => {
       let y = 0, step = 400;
       const t = setInterval(() => {
-        window.scrollBy(0, step);
-        y += step;
+        window.scrollBy(0, step); y += step;
         if (y >= document.body.scrollHeight - window.innerHeight) {
           clearInterval(t); res();
         }
@@ -89,6 +93,7 @@ async function autoScroll(page) {
   });
 }
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+
 
 
 
